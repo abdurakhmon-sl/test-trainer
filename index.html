@@ -206,29 +206,52 @@ const KEY = "trainer.v2";
 /* ---------- студенты и память (у каждого своя) ---------- */
 const USERS = (window.USERS || []).filter(u => u && u.login && u.hash);
 const SESSION = "trainer.session";
-let USER = null, db = null, HASH = "";
+let USER = null, db = null, TOKEN = "";
 const SYNC = window.SYNC_URL || "";
-let syncTimer = null;
+let syncBusy = false, syncRetry = null, dirty = false;
 function lsGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
 function lsSet(k, v){ try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch(e){} }
-function openUser(u, hash){
-  USER = u; HASH = hash;
+const ukey = suffix => KEY + ":" + USER.login.toLowerCase() + (suffix ? ":" + suffix : "");
+function openUser(u, token){
+  USER = u; TOKEN = token;
   let saved = {}; try { saved = JSON.parse(lsGet(KEY + ":" + u.login.toLowerCase())) || {}; } catch(e){}
   db = Object.assign({ stats: {}, last: {}, mode: "prep" }, saved);
 }
 function saveLocal(){ if (USER) lsSet(KEY + ":" + USER.login.toLowerCase(), JSON.stringify(db)); }
-function save(){ saveLocal(); pushRemote(); }
+function save(){ saveLocal(); dirty = true; }
 
 /* ---------- синхронизация с Google Таблицей (по логину) ---------- */
 async function api(body){
-  const r = await fetch(SYNC, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) });
-  return r.json();
+  const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = ctl && setTimeout(() => ctl.abort(), 25000);
+  try {
+    const r = await fetch(SYNC, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(Object.assign({ login: USER.login, token: TOKEN }, body)), signal: ctl ? ctl.signal : undefined });
+    return await r.json();
+  } finally { if (timer) clearTimeout(timer); }
 }
+/* результаты копятся в очереди на телефоне и уходят на сервер, когда он доступен */
+function outbox(){ try { return JSON.parse(lsGet(ukey("outbox"))) || []; } catch(e){ return []; } }
+function setOutbox(a){ lsSet(ukey("outbox"), JSON.stringify(a)); }
 function pushRemote(result){
-  if (!SYNC || !USER) return;
-  const send = () => api({ action: "save", login: USER.login, hash: HASH, name: USER.name || USER.login, db, result }).catch(() => {});
-  clearTimeout(syncTimer);
-  if (result) send(); else syncTimer = setTimeout(send, 1500);
+  if (!USER) return;
+  if (result) { result.at = Date.now(); const ob = outbox(); ob.push(result); setOutbox(ob.slice(-200)); }
+  dirty = true; flush();
+}
+async function flush(){
+  if (!SYNC || !USER || syncBusy) return;
+  const ob = outbox().slice(0, 50);
+  if (!ob.length && !dirty) return;
+  syncBusy = true; const sentDirty = dirty;
+  try {
+    const r = await api({ action: "save", name: USER.name || USER.login, db, results: ob });
+    if (r && r.ok) {
+      setOutbox(outbox().slice(ob.length)); if (sentDirty) dirty = false;
+      clearTimeout(syncRetry); syncRetry = null;
+      if (outbox().length) setTimeout(flush, 500);
+    } else throw new Error(r && r.error || "fail");
+  } catch(e) {
+    clearTimeout(syncRetry); syncRetry = setTimeout(flush, 30000);
+  } finally { syncBusy = false; }
 }
 function mergeDb(local, remote){
   if (!remote || !remote.stats) return local;
@@ -240,20 +263,30 @@ function mergeDb(local, remote){
 async function pullRemote(){
   if (!SYNC || !USER) return;
   try {
-    const r = await api({ action: "load", login: USER.login, hash: HASH });
-    if (r && r.ok) { db = mergeDb(db, r.db); saveLocal(); pushRemote(); }
+    const r = await api({ action: "load" });
+    if (r && r.ok) { db = mergeDb(db, r.db); saveLocal(); dirty = true; flush(); }
   } catch(e){}
 }
-async function enter(u, hash){
-  openUser(u, hash);
+async function enter(u, token){
+  openUser(u, token);
+  try { history.replaceState({ d: 0 }, ""); } catch(e){}
   if (SYNC) { app.innerHTML = '<p class="empty">Загружаю вашу статистику…</p>'; await Promise.race([pullRemote(), new Promise(r => setTimeout(r, 6000))]); }
   subjects();
 }
-async function hashOf(login, pass){
-  const data = new TextEncoder().encode(login.trim().toLowerCase() + ":" + pass);
-  const buf = await crypto.subtle.digest("SHA-256", data);
+async function sha(text){
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
 }
+/* ключ для сервера знает только тот, кто знает пароль; в users.js лежит лишь SHA-256 от ключа */
+async function keysOf(login, pass){
+  const token = await sha("api:" + login.trim().toLowerCase() + ":" + pass);
+  return { token, pub: await sha(token) };
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && USER && SYNC && dirty && navigator.sendBeacon) {
+    try { if (navigator.sendBeacon(SYNC, new Blob([JSON.stringify({ action: "save", login: USER.login, token: TOKEN, name: USER.name || USER.login, db })], { type: "text/plain" }))) dirty = false; } catch(e){}
+  }
+});
 const st = key => db.stats[key] || { s: 0, r: 0, w: 0, b: 0, l: null };
 function record(q, ok){
   const s = Object.assign({}, st(q.key));
@@ -285,6 +318,19 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp
 const app = document.getElementById("app");
 const top0 = () => window.scrollTo(0, 0);
 const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
+/* навигация: кнопка «Назад» браузера возвращает на экран выше, а не закрывает сайт */
+function up(){
+  const d = history.state && history.state.d;
+  if (d >= 1) { try { history.back(); return; } catch(e){} }
+  if (SUB && !test) subjects(); else if (SUB) subjectHome(); else subjects();
+}
+window.addEventListener("popstate", e => {
+  if (!USER) return;
+  const d = (e.state && e.state.d) || 0;
+  if (test && !test.done) { keepTest(); test = null; }
+  else if (test && test.done) test = null;
+  if (d >= 1 && SUB) subjectHome(); else subjects();
+});
 function plural(n, a, b, c){ const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? a : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? b : c; }
 function gradeOf(p){ return p >= 0.9 ? 5 : p >= 0.75 ? 4 : p >= 0.6 ? 3 : 2; }
 
@@ -327,20 +373,44 @@ function loginView(msg){
   app.querySelector("#lf").onsubmit = async e => {
     e.preventDefault();
     const login = app.querySelector("#lg").value.trim(), pass = app.querySelector("#pw").value;
-    let h = ""; try { h = await hashOf(login, pass); } catch(err) { return loginView("Браузер не поддерживает вход. Откройте сайт в Chrome или Safari."); }
-    const u = USERS.find(x => x.login.toLowerCase() === login.toLowerCase() && x.hash === h);
+    let k = null; try { k = await keysOf(login, pass); } catch(err) { return loginView("Браузер не поддерживает вход. Откройте сайт в Chrome или Safari."); }
+    const u = USERS.find(x => x.login.toLowerCase() === login.toLowerCase() && x.hash === k.pub);
     if (!u) return loginView("Неверный логин или пароль.");
-    lsSet(SESSION, JSON.stringify({ login: u.login.toLowerCase(), hash: h }));
-    enter(u, h);
+    lsSet(SESSION, JSON.stringify({ login: u.login.toLowerCase(), token: k.token }));
+    enter(u, k.token);
   };
   top0();
 }
-function logout(){ lsSet(SESSION, null); loginView(); }
+function logout(){ flush(); lsSet(SESSION, null); try { history.replaceState({ d: 0 }, ""); } catch(e){} loginView(); }
 
+function savedTest(){ try { return JSON.parse(lsGet(ukey("test"))); } catch(e){ return null; } }
+function keepTest(){ if (USER && test && !test.done && SUB) lsSet(ukey("test"), JSON.stringify({ s: SUB.name, part: ui.part, mode: test.mode, i: test.i, at: Date.now(), items: test.items.map(x => ({ k: x.q.key, o: x.order, p: x.pick, c: x.checked })) })); }
+function dropTest(){ if (USER) lsSet(ukey("test"), null); }
+function resumeBanner(onlySub){
+  const t = savedTest(); if (!t || (onlySub && onlySub !== t.s)) return "";
+  const n = t.items.filter(x => t.mode === "prep" ? x.c : x.p !== null).length;
+  return `<section class="sheet" style="border-color:var(--pen)"><div class="label">Незавершённый ${t.mode === "prep" ? "тест (подготовка)" : "экзамен"}</div>
+    <p><b>${esc(t.s)}</b>: отвечено ${n} из ${t.items.length}</p>
+    <div class="qnav"><button class="btn btn-line" id="rmTest">Удалить</button><button class="btn btn-main" id="resume">Продолжить</button></div></section>`;
+}
+function bindResume(){
+  const r = app.querySelector("#resume"), d = app.querySelector("#rmTest");
+  if (d) d.onclick = () => { dropTest(); SUB ? subjectHome() : subjects(); };
+  if (r) r.onclick = () => {
+    const t = savedTest(); const S = t && SUBJ.find(x => x.name === t.s);
+    const items = t && t.items.map(x => byKey[x.k] && { q: byKey[x.k], order: x.o, pick: x.p, checked: x.c });
+    if (!S || !items || items.some(x => !x)) { dropTest(); return SUB ? subjectHome() : subjects(); }
+    SUB = S; ui.part = t.part || "all";
+    try { if (!history.state || history.state.d < 2) history.pushState({ d: 2 }, ""); } catch(e){}
+    test = { mode: t.mode, i: Math.min(t.i || 0, items.length - 1), exitArmed: false, items };
+    quiz(); top0();
+  };
+}
 function subjects(){
   SUB = null; test = null;
   app.innerHTML = `
     <div class="row between"><span class="last">Студент: <b style="color:var(--ink)">${esc(USER.name || USER.login)}</b></span><button class="btn btn-line back" id="logout">Выйти</button></div>
+    ${resumeBanner()}
     <header class="hero">
       <span class="eyebrow">Тренажёр тестов</span>
       <h1>Выберите предмет</h1>
@@ -353,6 +423,7 @@ function subjects(){
         <div class="track" aria-hidden="true"><i style="width:${pct(m, s.qs.length)}%"></i></div></button>`;
     }).join("")}`;
   app.querySelector("#logout").onclick = logout;
+  bindResume();
   app.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { SUB = SUBJ[+b.dataset.s]; ui.part = "all"; study = { topic: "all", part: "all", q: "", hide: study.hide, onlyWrong: false, open: new Set() }; subjectHome(); });
   top0();
 }
@@ -360,6 +431,7 @@ function subjects(){
 /* ---------- 2. экран предмета ---------- */
 function subjectHome(){
   test = null;
+  try { if (!history.state || history.state.d < 1) history.pushState({ d: 1 }, ""); } catch(e){}
   const qs = SUB.qs, total = qs.length;
   const mastered = qs.filter(isMastered).length, wrongN = qs.filter(isWrong).length, seen = qs.filter(q => st(q.key).s).length;
   const ts = topicStats(qs).filter(x => x.tries).sort((a, b) => a.acc - b.acc);
@@ -368,6 +440,7 @@ function subjectHome(){
   app.innerHTML = `
     <div class="row between"><button class="btn btn-line back" id="toSubj">← Предметы</button>${last ? `<span class="last">прошлый: ${last.ok}/${last.total}</span>` : ""}</div>
     <header class="hero" style="padding-top:0"><span class="eyebrow">Предмет</span><h1>${esc(SUB.name)}</h1></header>
+    ${resumeBanner(SUB.name)}
 
     <section class="sheet">
       <div class="stats">
@@ -399,7 +472,8 @@ function subjectHome(){
       <p class="muted">Вопрос и сразу правильный ответ. Можно скрыть ответы и проверять себя.</p>
       <button class="btn btn-line btn-wide" id="goStudy">Открыть: вопрос → ответ</button>
     </section>`;
-  app.querySelector("#toSubj").onclick = subjects;
+  app.querySelector("#toSubj").onclick = up;
+  bindResume();
   app.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { db.mode = b.dataset.mode; save(); subjectHome(); });
   app.querySelectorAll("[data-part]").forEach(b => b.onclick = () => { ui.part = b.dataset.part; subjectHome(); });
   app.querySelector("#go").onclick = () => startTest(build25(db.mode), db.mode);
@@ -411,6 +485,7 @@ function subjectHome(){
 /* ---------- 3. тест ---------- */
 function startTest(list, mode){
   if (!list.length) return subjectHome();
+  try { if (!history.state || history.state.d < 2) history.pushState({ d: 2 }, ""); } catch(e){}
   test = { mode, i: 0, exitArmed: false, items: list.map(q => ({ q, order: q.tf ? [0,1] : shuffle(q.o.map((_, i) => i)), pick: null, checked: false })) };
   quiz(); top0();
 }
@@ -449,14 +524,16 @@ function quiz(){
     </div>`;
   app.querySelectorAll(".opt:not([disabled])").forEach(b => b.onclick = () => {
     it.pick = +b.dataset.oi; test.exitArmed = false;
+    if (it.checked) return;
     if (prep) { it.checked = true; test.justChecked = true; record(q, it.pick === q.a); save(); quiz(); return; }
     app.querySelectorAll(".opt").forEach(x => x.setAttribute("aria-checked", x === b));
     if (!last) setTimeout(() => { if (test && test.items[test.i] === it) { test.i++; quiz(); } }, 260); else quiz();
   });
-  app.querySelector("#exit").onclick = () => { if (test.exitArmed) { if (prep) finishCommon(true); subjectHome(); } else { test.exitArmed = true; quiz(); } };
+  app.querySelector("#exit").onclick = () => { if (test.exitArmed) { if (prep) finishCommon(true); dropTest(); test = null; up(); } else { test.exitArmed = true; quiz(); } };
   const pv = app.querySelector("#prev"); if (pv) pv.onclick = () => { test.i--; test.exitArmed = false; quiz(); };
   const nx = app.querySelector("#next"); if (nx) nx.onclick = () => { test.i++; test.exitArmed = false; quiz(); top0(); };
   const fin = app.querySelector("#finish"); if (fin) fin.onclick = finish;
+  keepTest();
   if (locked && test.justChecked) { test.justChecked = false; const nav = app.querySelector(".qnav"); if (nav && nav.scrollIntoView) nav.scrollIntoView({ block: "end", behavior: "smooth" }); }
 }
 function finishCommon(partial){
@@ -477,7 +554,7 @@ function finishCommon(partial){
   } else pushRemote();
   return { ok, counted };
 }
-function finish(){ const r = finishCommon(); test.done = r; results(); }
+function finish(){ const r = finishCommon(); test.done = r; dropTest(); results(); }
 function results(){
   const { ok, counted } = test.done, n = counted.length, bad = n - ok, p = n ? ok / n : 0;
   const per = topicsOf(counted.map(x => x.q)).map(t => { const xs = counted.filter(x => x.q.t === t); return { t, n: xs.length, ok: xs.filter(x => x.pick === x.q.a).length }; });
@@ -496,7 +573,7 @@ function results(){
     <div class="qnav"><button class="btn btn-line" id="home">К предмету</button><button class="btn btn-main" id="again">Ещё тест</button></div>`;
   const rv = app.querySelector("#review"); if (rv) rv.onclick = review;
   const rd = app.querySelector("#redo"); if (rd) rd.onclick = redoWrong;
-  app.querySelector("#home").onclick = subjectHome;
+  app.querySelector("#home").onclick = up;
   app.querySelector("#again").onclick = () => startTest(build25(db.mode), db.mode);
   top0();
 }
@@ -520,12 +597,13 @@ function review(){
     <div class="qnav"><button class="btn btn-line" id="back">К результату</button><button class="btn btn-line" id="home">К предмету</button></div>`;
   app.querySelector("#redo").onclick = redoWrong;
   app.querySelector("#back").onclick = results;
-  app.querySelector("#home").onclick = subjectHome;
+  app.querySelector("#home").onclick = up;
   top0();
 }
 
 /* ---------- 4. учить: вопрос → ответ ---------- */
 function studyView(){
+  try { if (!history.state || history.state.d < 2) history.pushState({ d: 2 }, ""); } catch(e){}
   const wrongN = SUB.qs.filter(isWrong).length;
   const memos = SUB.sets.map(s => s.memo).filter(Boolean);
   app.innerHTML = `
@@ -546,7 +624,7 @@ function studyView(){
   app.querySelectorAll("[data-t]").forEach(b => b.onclick = () => { study.topic = b.dataset.t; study.onlyWrong = false; studyView(); });
   const w = app.querySelector("[data-w]"); if (w) w.onclick = () => { study.onlyWrong = !study.onlyWrong; study.topic = "all"; studyView(); };
   app.querySelector("#hide").onchange = e => { study.hide = e.target.checked; study.open = new Set(); cards(); };
-  app.querySelector("#home").onclick = subjectHome;
+  app.querySelector("#home").onclick = up;
   cards(); top0();
 }
 function cards(){
@@ -574,8 +652,9 @@ if (!SUBJ.length) app.innerHTML = '<p class="empty">Тесты не найден
 else if (!USERS.length) app.innerHTML = '<p class="empty">Список студентов пуст. Добавьте логины в users.js.</p>';
 else {
   let sess = null; try { sess = JSON.parse(lsGet(SESSION)); } catch(e){}
-  const u = sess && USERS.find(x => x.login.toLowerCase() === sess.login && x.hash === sess.hash);
-  if (u) enter(u, sess.hash); else loginView();
+  const u = sess && sess.token && USERS.find(x => x.login.toLowerCase() === sess.login);
+  if (!u) loginView();
+  else sha(sess.token).then(pub => pub === u.hash ? enter(u, sess.token) : (lsSet(SESSION, null), loginView())).catch(() => loginView());
 }
 </script>
 

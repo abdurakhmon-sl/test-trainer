@@ -25,7 +25,7 @@ code { font-family: ui-monospace, Menlo, monospace; color: var(--ink); }
 <body>
 <main>
   <h1>Добавить студента</h1>
-  <p>Пароль никуда не отправляется. Страница считает его отпечаток прямо в браузере.</p>
+  <p>Пароль никуда не отправляется. Страница считает его отпечаток прямо в браузере. Пароль лучше делать не короче 8 символов: короткие пароли подбираются по отпечатку.</p>
   <form class="sheet" id="f">
     <label for="lg">Логин (латиницей, без пробелов)</label>
     <input id="lg" required autocapitalize="none" spellcheck="false" placeholder="ivanov">
@@ -48,10 +48,11 @@ code { font-family: ui-monospace, Menlo, monospace; color: var(--ink); }
 </main>
 <script>
 const $ = id => document.getElementById(id);
-async function hashOf(login, pass){
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(login.trim().toLowerCase() + ":" + pass));
+async function sha(text){
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
 }
+async function hashOf(login, pass){ return sha(await sha("api:" + login.trim().toLowerCase() + ":" + pass)); }
 $("f").onsubmit = async e => {
   e.preventDefault();
   const login = $("lg").value.trim().toLowerCase().replace(/\s+/g, ""), name = $("nm").value.trim().replace(/"/g, "'"), pass = $("pw").value;
