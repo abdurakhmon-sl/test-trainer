@@ -136,6 +136,43 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .switch { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 500; cursor: pointer; }
 .switch input { width: 22px; height: 22px; accent-color: var(--pen); }
 .empty { text-align: center; color: var(--muted); padding: 24px; }
+/* subjects, modes, feedback */
+.subj { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; text-align: left; padding: 18px; border: 1.5px solid var(--line); border-radius: var(--r); background: var(--sheet); }
+.subj h2 { font-size: 20px; }
+.subj .meta { grid-column: 1; color: var(--muted); font-size: 14px; }
+.subj .go { grid-row: 1 / 3; grid-column: 2; font: 600 22px/1 var(--f-mono); color: var(--pen); }
+.subj .track { grid-column: 1 / -1; margin-top: 8px; height: 5px; }
+.subj .track > i { background: var(--ok); }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 4px; background: var(--paper); border-radius: 14px; border: 1px solid var(--line); }
+.seg button { padding: 10px 8px; border-radius: 10px; text-align: center; display: flex; flex-direction: column; gap: 2px; }
+.seg button b { font-size: 16px; }
+.seg button small { font-size: 12.5px; color: var(--muted); line-height: 1.3; }
+.seg button[aria-pressed="true"] { background: var(--sheet); box-shadow: 0 1px 3px rgb(0 0 0 / .12); }
+.seg button[aria-pressed="true"] b { color: var(--pen); }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.stat { display: flex; flex-direction: column; gap: 2px; }
+.stat b { font: 700 22px/1.1 var(--f-display); font-variant-numeric: tabular-nums; }
+.stat span { font-size: 13px; color: var(--muted); line-height: 1.3; }
+.stat.red b { color: var(--red); }
+.stat.ok b { color: var(--ok); }
+.weak .trow .track > i { background: var(--red); }
+.weak .trow.good .track > i { background: var(--ok); }
+.opt.is-right { border-color: var(--ok); background: var(--ok-soft); }
+.opt.is-right .let { background: var(--ok); border-color: var(--ok); color: var(--sheet); }
+.opt.is-wrong { border-color: var(--red); background: var(--red-soft); }
+.opt.is-wrong .let { background: var(--red); border-color: var(--red); color: var(--sheet); }
+.opt.is-dim { opacity: .55; }
+.opts.locked .opt { cursor: default; }
+.fb { border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.fb.ok { background: var(--ok-soft); }
+.fb.bad { background: var(--red-soft); }
+.fb strong { font-family: var(--f-display); font-size: 16px; }
+.fb.ok strong { color: var(--ok); }
+.fb.bad strong { color: var(--red); }
+.fb .note { margin-top: 2px; }
+.live { font: 500 13px/1 var(--f-mono); font-variant-numeric: tabular-nums; }
+.live .r { color: var(--ok); } .live .w { color: var(--red); }
+.back { min-height: 40px; padding: 8px 14px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
@@ -146,164 +183,250 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 <script src="test-medstat.js"></script>
 
 <script>
+/* ---------- данные ---------- */
 const SETS = (window.TESTS || []).filter(t => t && t.questions && t.questions.length);
+const ALL = [];
+const SUBJ = [];
+SETS.forEach(s => {
+  const name = s.subject || "Без предмета";
+  let sub = SUBJ.find(x => x.name === name);
+  if (!sub) { sub = { name, sets: [], qs: [] }; SUBJ.push(sub); }
+  sub.sets.push(s);
+  s.questions.forEach(q => { const x = Object.assign({}, q, { key: s.id + ":" + q.id, set: s.id, part: s.short || s.title, subject: name }); sub.qs.push(x); ALL.push(x); });
+});
+const byKey = Object.fromEntries(ALL.map(q => [q.key, q]));
 const LET = ["А","Б","В","Г","Д","Е"];
-const KEY = "tests.v1";
+const KEY = "trainer.v2";
+
+/* ---------- память ---------- */
 function load(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch(e){ return {}; } }
+let db = Object.assign({ stats: {}, last: {}, mode: "prep" }, load());
+try { // перенос ошибок из прошлой версии
+  const old = JSON.parse(localStorage.getItem("tests.v1"));
+  if (old && old.sets && !db.migrated) {
+    Object.entries(old.sets).forEach(([sid, st]) => (st.wrong || []).forEach(id => { db.stats[sid + ":" + id] = { s: 1, r: 0, w: 1, b: 1, l: 0 }; }));
+    db.migrated = 1;
+  }
+} catch(e){}
 function save(){ try { localStorage.setItem(KEY, JSON.stringify(db)); } catch(e){} }
-let db = Object.assign({ cur: null, sets: {} }, load());
-let SET, QS, TOPICS, byId, store;
-function useSet(id){
-  SET = SETS.find(t => t.id === id) || SETS[0];
-  QS = SET.questions;
-  TOPICS = [...new Set(QS.map(q => q.t).filter(Boolean))];
-  byId = Object.fromEntries(QS.map(q => [q.id, q]));
-  store = db.sets[SET.id] = Object.assign({ wrong: [], last: null }, db.sets[SET.id]);
-  db.cur = SET.id; save();
-  ui.topic = "all"; study = { topic: "all", q: "", hide: study.hide, onlyWrong: false, open: new Set() };
+const st = key => db.stats[key] || { s: 0, r: 0, w: 0, b: 0, l: null };
+function record(q, ok){
+  const s = Object.assign({}, st(q.key));
+  s.s++; if (ok) { s.r++; s.b = s.b >= 1 ? s.b + 1 : 2; s.l = 1; } else { s.w++; s.b = 1; s.l = 0; }
+  db.stats[q.key] = s;
+}
+const isWrong = q => st(q.key).l === 0;
+const isMastered = q => st(q.key).b >= 3;
+
+function topicStats(qs){
+  const m = {};
+  qs.forEach(q => { const t = q.t || "Без темы"; const s = st(q.key); m[t] = m[t] || { t, r: 0, w: 0, n: 0 }; m[t].n++; m[t].r += s.r; m[t].w += s.w; });
+  return Object.values(m).map(x => Object.assign(x, { tries: x.r + x.w, acc: x.r + x.w ? x.r / (x.r + x.w) : null }));
+}
+/* умный подбор: чаще ошибочные вопросы и слабые темы */
+function weightOf(q, topicErr){
+  const s = st(q.key);
+  let w = !s.s ? 3 : s.l === 0 ? 40 : [3, 6, 3, 1, 0.5, 0.25][Math.min(s.b, 5)];
+  return w * (1 + 3 * (topicErr[q.t || "Без темы"] || 0));
+}
+function smartPick(pool, k){
+  const te = {}; topicStats(pool).forEach(x => { te[x.t] = x.tries >= 3 ? 1 - x.acc : 0; });
+  return shuffle(pool.map(q => ({ q, k: Math.pow(Math.random(), 1 / weightOf(q, te)) })).sort((a, b) => b.k - a.k).slice(0, k).map(x => x.q));
 }
 
+/* ---------- утилиты ---------- */
 const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
-const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
 const app = document.getElementById("app");
 const top0 = () => window.scrollTo(0, 0);
+const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
+function plural(n, a, b, c){ const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? a : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? b : c; }
+function gradeOf(p){ return p >= 0.9 ? 5 : p >= 0.75 ? 4 : p >= 0.6 ? 3 : 2; }
 
-let ui = { count: 20, topic: "all" };
+let SUB = null;          // выбранный предмет
+let ui = { count: 20, topic: "all", part: "all" };
 let test = null;
-let study = { topic: "all", q: "", hide: false, onlyWrong: false, open: new Set() };
-if (SETS.length) useSet(db.cur);
+let study = { topic: "all", part: "all", q: "", hide: false, onlyWrong: false, open: new Set() };
 
-/* ---------- HOME ---------- */
-function home(){
-  const wrongN = store.wrong.length;
-  const total = QS.length;
-  const counts = [...new Set([20, 50].filter(c => c < total).concat(total))];
-  if (!counts.includes(ui.count)) ui.count = counts[0];
+function topicsOf(qs){ return [...new Set(qs.map(q => q.t).filter(Boolean))]; }
+function poolOf(){
+  let p = SUB.qs;
+  if (ui.part !== "all") p = p.filter(q => q.set === ui.part);
+  if (ui.topic !== "all") p = p.filter(q => q.t === ui.topic);
+  return p;
+}
+
+/* ---------- 1. выбор предмета ---------- */
+function subjects(){
+  SUB = null; test = null;
   app.innerHTML = `
     <header class="hero">
-      <span class="eyebrow">${esc(SET.subject || "Тренажёр")}</span>
-      <h1>${esc(SET.title)}</h1>
-      <p>Вопросы каждый раз идут в новом порядке, варианты ответов тоже перемешаны. В конце будет оценка и работа над ошибками.</p>
+      <span class="eyebrow">Тренажёр тестов</span>
+      <h1>Выберите предмет</h1>
+      <p>Тесты берутся только из выбранного предмета. Программа запоминает ваши ошибки и чаще даёт трудные вопросы.</p>
     </header>
-    ${SETS.length > 1 ? `<section class="sheet"><div class="label">Какой тест решаем</div>
-      <div class="row">${SETS.map(t => `<button class="chip" data-set="${esc(t.id)}" aria-pressed="${t.id===SET.id}">${esc(t.short || t.title)} · ${t.questions.length}</button>`).join("")}</div></section>` : ""}
-
-    <section class="sheet" aria-labelledby="h-test">
-      <div class="mode-head"><h2 id="h-test">Тест</h2>${store.last ? `<span class="last">прошлый: ${store.last.ok}/${store.last.total}</span>` : ""}</div>
-      <div><div class="label">Сколько вопросов</div>
-        <div class="row" style="margin-top:8px">${counts.map(c => `<button class="chip" data-count="${c}" aria-pressed="${ui.count===c}">${c === total ? `Все ${total}` : c}</button>`).join("")}</div></div>
-      <div><div class="label">Тема</div>
-        <div class="row" style="margin-top:8px"><button class="chip" data-topic="all" aria-pressed="${ui.topic==="all"}">Все темы</button>${TOPICS.map((t,i) => `<button class="chip" data-topic="${i}" aria-pressed="${ui.topic===String(i)}">${t}</button>`).join("")}</div></div>
-      <button class="btn btn-main btn-wide" id="go">Начать тест</button>
-      ${wrongN ? `<button class="btn btn-line btn-wide" id="go-wrong" style="color:var(--red);border-color:var(--red)">Решить только мои ошибки · ${wrongN}</button>` : ""}
-    </section>
-
-    <section class="sheet" aria-labelledby="h-study">
-      <h2 id="h-study">Учить</h2>
-      <p class="muted">Вопрос и сразу правильный ответ. Можно скрыть ответы и проверять себя.</p>
-      <button class="btn btn-line btn-wide" id="go-study">Открыть: вопрос → ответ</button>
-    </section>`;
-  app.querySelectorAll("[data-set]").forEach(b => b.onclick = () => { useSet(b.dataset.set); home(); });
-  app.querySelectorAll("[data-count]").forEach(b => b.onclick = () => { ui.count = +b.dataset.count; home(); });
-  app.querySelectorAll("[data-topic]").forEach(b => b.onclick = () => { ui.topic = b.dataset.topic; home(); });
-  app.querySelector("#go").onclick = () => {
-    let pool = ui.topic === "all" ? QS : QS.filter(q => q.t === TOPICS[+ui.topic]);
-    startTest(shuffle(pool).slice(0, ui.count));
-  };
-  const gw = app.querySelector("#go-wrong"); if (gw) gw.onclick = () => startTest(shuffle(store.wrong.map(id => byId[id]).filter(Boolean)));
-  app.querySelector("#go-study").onclick = () => { study.open = new Set(); studyView(); };
+    ${SUBJ.map((s, i) => {
+      const m = s.qs.filter(isMastered).length;
+      return `<button class="subj" data-s="${i}"><h2>${esc(s.name)}</h2><span class="go">→</span>
+        <span class="meta">${s.qs.length} ${plural(s.qs.length, "вопрос", "вопроса", "вопросов")} · освоено ${m}</span>
+        <div class="track" aria-hidden="true"><i style="width:${pct(m, s.qs.length)}%"></i></div></button>`;
+    }).join("")}`;
+  app.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { SUB = SUBJ[+b.dataset.s]; ui.topic = "all"; ui.part = "all"; study = { topic: "all", part: "all", q: "", hide: study.hide, onlyWrong: false, open: new Set() }; subjectHome(); });
   top0();
 }
 
-/* ---------- TEST ---------- */
-function startTest(list){
-  if (!list.length) return home();
-  test = {
-    items: list.map(q => ({ q, order: q.tf ? [0,1] : shuffle([0,1,2,3]), pick: null })),
-    i: 0, exitArmed: false
-  };
+/* ---------- 2. экран предмета ---------- */
+function subjectHome(){
+  test = null;
+  const qs = SUB.qs, total = qs.length;
+  const mastered = qs.filter(isMastered).length, wrongN = qs.filter(isWrong).length, seen = qs.filter(q => st(q.key).s).length;
+  const ts = topicStats(qs).filter(x => x.tries).sort((a, b) => a.acc - b.acc);
+  const pool = poolOf();
+  const counts = [...new Set([20, 50].filter(c => c < pool.length).concat(pool.length))];
+  if (!counts.includes(ui.count)) ui.count = counts[0];
+  const prep = db.mode === "prep";
+  const last = db.last[SUB.name];
+  app.innerHTML = `
+    <div class="row between"><button class="btn btn-line back" id="toSubj">← Предметы</button>${last ? `<span class="last">прошлый: ${last.ok}/${last.total}</span>` : ""}</div>
+    <header class="hero" style="padding-top:0"><span class="eyebrow">Предмет</span><h1>${esc(SUB.name)}</h1></header>
+
+    <section class="sheet">
+      <div class="stats">
+        <div class="stat ok"><b>${mastered}</b><span>освоено из ${total}</span></div>
+        <div class="stat red"><b>${wrongN}</b><span>сейчас с ошибкой</span></div>
+        <div class="stat"><b>${total - seen}</b><span>ещё не решали</span></div>
+      </div>
+      ${ts.length ? `<div class="topics weak"><div class="label">Темы: сначала самые слабые</div>
+        ${ts.map(x => `<div class="trow ${x.acc >= 0.8 ? "good" : ""}"><span>${esc(x.t)}</span><b>${pct(x.r, x.tries)}%</b><div class="track"><i style="width:${Math.max(4, pct(x.r, x.tries))}%"></i></div></div>`).join("")}</div>`
+        : `<p class="muted" style="font-size:15px">После первого теста здесь появятся ваши слабые темы.</p>`}
+    </section>
+
+    <section class="sheet">
+      <div class="seg" role="group" aria-label="Режим">
+        <button data-mode="prep" aria-pressed="${prep}"><b>Подготовка</b><small>ответ сразу после вопроса</small></button>
+        <button data-mode="exam" aria-pressed="${!prep}"><b>Экзамен</b><small>ответы только в конце</small></button>
+      </div>
+      <p class="muted" style="font-size:14px">${prep ? "Чаще попадаются вопросы, где вы ошибались, и слабые темы." : "Вопросы выбираются случайно, как на настоящем экзамене."}</p>
+      ${SUB.sets.length > 1 ? `<div><div class="label">Тест</div><div class="row" style="margin-top:8px">
+        <button class="chip" data-part="all" aria-pressed="${ui.part==="all"}">Все</button>
+        ${SUB.sets.map(s => `<button class="chip" data-part="${esc(s.id)}" aria-pressed="${ui.part===s.id}">${esc(s.short || s.title)}</button>`).join("")}</div></div>` : ""}
+      <div><div class="label">Тема</div><div class="row" style="margin-top:8px">
+        <button class="chip" data-topic="all" aria-pressed="${ui.topic==="all"}">Все темы</button>
+        ${topicsOf(SUB.qs.filter(q => ui.part === "all" || q.set === ui.part)).map(t => `<button class="chip" data-topic="${esc(t)}" aria-pressed="${ui.topic===t}">${esc(t)}</button>`).join("")}</div></div>
+      <div><div class="label">Сколько вопросов</div><div class="row" style="margin-top:8px">
+        ${counts.map(c => `<button class="chip" data-count="${c}" aria-pressed="${ui.count===c}">${c === pool.length ? `Все ${c}` : c}</button>`).join("")}</div></div>
+      <button class="btn btn-main btn-wide" id="go">${prep ? "Начать подготовку" : "Начать экзамен"}</button>
+      ${wrongN ? `<button class="btn btn-line btn-wide" id="goWrong" style="color:var(--red);border-color:var(--red)">Решить только мои ошибки · ${wrongN}</button>` : ""}
+    </section>
+
+    <section class="sheet">
+      <h2>Учить</h2>
+      <p class="muted">Вопрос и сразу правильный ответ. Можно скрыть ответы и проверять себя.</p>
+      <button class="btn btn-line btn-wide" id="goStudy">Открыть: вопрос → ответ</button>
+    </section>`;
+  app.querySelector("#toSubj").onclick = subjects;
+  app.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { db.mode = b.dataset.mode; save(); subjectHome(); });
+  app.querySelectorAll("[data-part]").forEach(b => b.onclick = () => { ui.part = b.dataset.part; ui.topic = "all"; subjectHome(); });
+  app.querySelectorAll("[data-topic]").forEach(b => b.onclick = () => { ui.topic = b.dataset.topic; subjectHome(); });
+  app.querySelectorAll("[data-count]").forEach(b => b.onclick = () => { ui.count = +b.dataset.count; subjectHome(); });
+  app.querySelector("#go").onclick = () => { const p = poolOf(); startTest(db.mode === "prep" ? smartPick(p, ui.count) : shuffle(p).slice(0, ui.count), db.mode); };
+  const gw = app.querySelector("#goWrong"); if (gw) gw.onclick = () => startTest(shuffle(SUB.qs.filter(isWrong)), db.mode);
+  app.querySelector("#goStudy").onclick = () => { study.open = new Set(); studyView(); };
+  top0();
+}
+
+/* ---------- 3. тест ---------- */
+function startTest(list, mode){
+  if (!list.length) return subjectHome();
+  test = { mode, i: 0, exitArmed: false, items: list.map(q => ({ q, order: q.tf ? [0,1] : shuffle(q.o.map((_, i) => i)), pick: null, checked: false })) };
   quiz(); top0();
 }
 function quiz(){
-  const { items, i } = test, it = items[i], q = it.q, n = items.length;
-  const answered = items.filter(x => x.pick !== null).length;
-  const last = i === n - 1;
+  const { items, i, mode } = test, it = items[i], q = it.q, n = items.length, last = i === n - 1;
+  const prep = mode === "prep";
+  const done = items.filter(x => prep ? x.checked : x.pick !== null).length;
+  const r = items.filter(x => x.checked && x.pick === x.q.a).length, w = items.filter(x => x.checked && x.pick !== x.q.a).length;
+  const locked = prep && it.checked;
+  const optClass = oi => !locked ? "" : oi === q.a ? "is-right" : oi === it.pick ? "is-wrong" : "is-dim";
   app.innerHTML = `
     <div class="qbar">
       <div class="row between">
-        <button class="btn btn-line" id="exit" style="min-height:40px;padding:8px 14px">${test.exitArmed ? '<span class="exit-warn">Точно выйти?</span>' : "Выйти"}</button>
+        <button class="btn btn-line back" id="exit">${test.exitArmed ? '<span class="exit-warn">Точно выйти?</span>' : "Выйти"}</button>
+        ${prep ? `<span class="live"><span class="r">✓ ${r}</span> · <span class="w">✗ ${w}</span></span>` : `<span class="eyebrow">Экзамен</span>`}
         <span class="counter">${i+1} / ${n}</span>
       </div>
-      <div class="track" aria-hidden="true"><i style="width:${answered/n*100}%"></i></div>
+      <div class="track" aria-hidden="true"><i style="width:${done/n*100}%"></i></div>
     </div>
     <section class="sheet">
-      <span class="tag">${q.tf ? "Верно или неверно?" : esc(q.t || "")}</span>
+      <span class="tag">${q.tf ? "Верно или неверно?" : esc(q.t)}</span>
       <p class="qtext">${esc(q.q)}</p>
-      <div class="opts ${q.tf ? "tf" : ""}" role="radiogroup">
-        ${it.order.map((oi, k) => `<button class="opt" role="radio" data-oi="${oi}" aria-checked="${it.pick===oi}"><span class="let">${LET[k]}</span><span>${esc(q.o[oi])}</span></button>`).join("")}
+      <div class="opts ${q.tf ? "tf" : ""} ${locked ? "locked" : ""}" role="radiogroup">
+        ${it.order.map((oi, k) => `<button class="opt ${optClass(oi)}" role="radio" data-oi="${oi}" aria-checked="${it.pick===oi}" ${locked ? "disabled" : ""}><span class="let">${LET[k]}</span><span>${esc(q.o[oi])}</span></button>`).join("")}
       </div>
+      ${locked ? (it.pick === q.a
+        ? `<div class="fb ok"><strong>Правильно</strong>${q.n ? `<p class="note" style="color:var(--ok);border-left-color:var(--ok)">${esc(q.n)}</p>` : ""}</div>`
+        : `<div class="fb bad"><strong>Ошибка</strong><span>Правильный ответ: <b>${esc(q.o[q.a])}</b></span>${q.n ? `<p class="note">${esc(q.n)}</p>` : ""}</div>`) : ""}
     </section>
     <div class="qnav">
-      <button class="btn btn-line" id="prev" ${i===0?"disabled":""}>Назад</button>
-      ${last ? `<button class="btn btn-main" id="finish">Завершить${answered<n ? ` (${answered}/${n})` : ""}</button>`
-             : `<button class="btn btn-line" id="next">Дальше</button>`}
+      ${prep ? `<button class="btn btn-line" id="prev" ${i===0?"disabled":""}>Назад</button>
+                ${locked ? (last ? `<button class="btn btn-main" id="finish">Результат</button>` : `<button class="btn btn-main" id="next">Дальше</button>`)
+                         : `<button class="btn btn-line" disabled>Выберите ответ</button>`}`
+             : `<button class="btn btn-line" id="prev" ${i===0?"disabled":""}>Назад</button>
+                ${last ? `<button class="btn btn-main" id="finish">Завершить${done<n ? ` (${done}/${n})` : ""}</button>` : `<button class="btn btn-line" id="next">Дальше</button>`}`}
     </div>`;
-  app.querySelectorAll(".opt").forEach(b => b.onclick = () => {
+  app.querySelectorAll(".opt:not([disabled])").forEach(b => b.onclick = () => {
     it.pick = +b.dataset.oi; test.exitArmed = false;
+    if (prep) { it.checked = true; test.justChecked = true; record(q, it.pick === q.a); save(); quiz(); return; }
     app.querySelectorAll(".opt").forEach(x => x.setAttribute("aria-checked", x === b));
-    if (!last) setTimeout(() => { if (test && test.items[test.i] === it) { test.i++; quiz(); } }, 260);
-    else quiz();
+    if (!last) setTimeout(() => { if (test && test.items[test.i] === it) { test.i++; quiz(); } }, 260); else quiz();
   });
-  app.querySelector("#exit").onclick = () => { if (test.exitArmed) { test = null; home(); } else { test.exitArmed = true; quiz(); } };
-  app.querySelector("#prev").onclick = () => { test.i--; test.exitArmed = false; quiz(); };
-  const nx = app.querySelector("#next"); if (nx) nx.onclick = () => { test.i++; test.exitArmed = false; quiz(); };
+  app.querySelector("#exit").onclick = () => { if (test.exitArmed) { if (prep) finishCommon(true); subjectHome(); } else { test.exitArmed = true; quiz(); } };
+  const pv = app.querySelector("#prev"); if (pv) pv.onclick = () => { test.i--; test.exitArmed = false; quiz(); };
+  const nx = app.querySelector("#next"); if (nx) nx.onclick = () => { test.i++; test.exitArmed = false; quiz(); top0(); };
   const fin = app.querySelector("#finish"); if (fin) fin.onclick = finish;
+  if (locked && test.justChecked) { test.justChecked = false; const nav = app.querySelector(".qnav"); if (nav && nav.scrollIntoView) nav.scrollIntoView({ block: "end", behavior: "smooth" }); }
 }
-function finish(){
+function finishCommon(partial){
   const items = test.items;
-  const ok = items.filter(x => x.pick === x.q.a).length;
-  const wrong = new Set(store.wrong);
-  items.forEach(x => x.pick === x.q.a ? wrong.delete(x.q.id) : wrong.add(x.q.id));
-  store.wrong = [...wrong].sort((a,b) => a-b);
-  store.last = { ok, total: items.length };
+  if (test.mode === "exam") items.forEach(x => record(x.q, x.pick === x.q.a));
+  const counted = test.mode === "prep" ? items.filter(x => x.checked) : items;
+  const ok = counted.filter(x => x.pick === x.q.a).length;
+  if (counted.length) db.last[SUB.name] = { ok, total: counted.length };
   save();
-  test.done = { ok };
-  results();
+  return { ok, counted };
 }
-function gradeOf(p){ return p >= 0.9 ? 5 : p >= 0.75 ? 4 : p >= 0.6 ? 3 : 2; }
+function finish(){ const r = finishCommon(); test.done = r; results(); }
 function results(){
-  const items = test.items, n = items.length, ok = test.done.ok, bad = n - ok, p = ok / n;
-  const per = TOPICS.map(t => { const xs = items.filter(x => x.q.t === t); return { t, n: xs.length, ok: xs.filter(x => x.pick === x.q.a).length }; }).filter(r => r.n);
+  const { ok, counted } = test.done, n = counted.length, bad = n - ok, p = n ? ok / n : 0;
+  const per = topicsOf(counted.map(x => x.q)).map(t => { const xs = counted.filter(x => x.q.t === t); return { t, n: xs.length, ok: xs.filter(x => x.pick === x.q.a).length }; });
   app.innerHTML = `
     <section class="sheet">
-      <span class="eyebrow">Результат</span>
+      <span class="eyebrow">${test.mode === "prep" ? "Подготовка" : "Экзамен"} · ${esc(SUB.name)}</span>
       <div class="grade-wrap">
         <div class="grade" aria-label="Оценка ${gradeOf(p)}">${gradeOf(p)}</div>
-        <div><div class="score">${ok} из ${n}</div><p class="muted">${Math.round(p*100)}% правильно${bad ? ` · ошибок: ${bad}` : ""}</p></div>
+        <div><div class="score">${ok} из ${n}</div><p class="muted">${pct(ok, n)}% правильно${bad ? ` · ошибок: ${bad}` : ""}</p></div>
       </div>
-      <div class="topics">${per.map(r => `<div class="trow"><span>${r.t}</span><b>${r.ok}/${r.n}</b><div class="track"><i style="width:${r.ok/r.n*100}%"></i></div></div>`).join("")}</div>
+      <div class="topics">${per.map(r => `<div class="trow"><span>${esc(r.t)}</span><b>${r.ok}/${r.n}</b><div class="track"><i style="width:${r.ok/r.n*100}%"></i></div></div>`).join("")}</div>
     </section>
-    ${bad ? `<button class="btn btn-red btn-wide" id="review">Работа над ошибками · ${bad}</button>` : `<div class="sheet all-good"><h2>Без единой ошибки</h2><p class="muted">Можно брать следующий набор.</p></div>`}
-    ${bad ? `<button class="btn btn-line btn-wide" id="redo">Решить ошибки заново</button>` : ""}
-    <div class="qnav">
-      <button class="btn btn-line" id="home">На главную</button>
-      <button class="btn btn-main" id="again">Новый тест</button>
-    </div>`;
+    ${bad ? `<button class="btn btn-red btn-wide" id="review">Работа над ошибками · ${bad}</button>
+             <button class="btn btn-line btn-wide" id="redo">Решить ошибки заново</button>`
+          : `<div class="sheet all-good"><h2>Без единой ошибки</h2><p class="muted">Можно брать следующий набор.</p></div>`}
+    <div class="qnav"><button class="btn btn-line" id="home">К предмету</button><button class="btn btn-main" id="again">Ещё тест</button></div>`;
   const rv = app.querySelector("#review"); if (rv) rv.onclick = review;
   const rd = app.querySelector("#redo"); if (rd) rd.onclick = redoWrong;
-  app.querySelector("#home").onclick = () => { test = null; home(); };
-  app.querySelector("#again").onclick = () => { const pool = ui.topic === "all" ? QS : QS.filter(q => q.t === TOPICS[+ui.topic]); startTest(shuffle(pool).slice(0, ui.count)); };
+  app.querySelector("#home").onclick = subjectHome;
+  app.querySelector("#again").onclick = () => { const p = poolOf(); startTest(db.mode === "prep" ? smartPick(p, ui.count) : shuffle(p).slice(0, ui.count), db.mode); };
   top0();
 }
-function redoWrong(){ startTest(shuffle(test.items.filter(x => x.pick !== x.q.a).map(x => x.q))); }
+function redoWrong(){ startTest(shuffle(test.done.counted.filter(x => x.pick !== x.q.a).map(x => x.q)), test.mode); }
 function review(){
-  const bad = test.items.filter(x => x.pick !== x.q.a);
+  const bad = test.done.counted.filter(x => x.pick !== x.q.a);
   app.innerHTML = `
     <header class="hero"><span class="eyebrow">Работа над ошибками</span><h1>${bad.length} ${plural(bad.length, "ошибка","ошибки","ошибок")}</h1>
       <p>Прочитайте правильный ответ вслух. Потом решите эти вопросы ещё раз.</p></header>
     ${bad.map(x => `
       <article class="sheet err">
-        <div class="err-head"><span class="tag">Вопрос ${x.q.id} · ${esc(x.q.t || "")}</span><span class="mark">ошибка</span></div>
+        <div class="err-head"><span class="tag">№ ${x.q.id} · ${esc(x.q.t)}</span><span class="mark">ошибка</span></div>
         <p class="qtext">${esc(x.q.q)}</p>
         <div class="ans">
           <div class="yours"><small>Ваш ответ</small>${x.pick === null ? "<i>нет ответа</i>" : `<s>${esc(x.q.o[x.pick])}</s>`}</div>
@@ -312,58 +435,60 @@ function review(){
         ${x.q.n ? `<p class="note">${esc(x.q.n)}</p>` : ""}
       </article>`).join("")}
     <button class="btn btn-red btn-wide" id="redo">Решить эти ${bad.length} заново</button>
-    <div class="qnav"><button class="btn btn-line" id="back">К результату</button><button class="btn btn-line" id="home">На главную</button></div>`;
+    <div class="qnav"><button class="btn btn-line" id="back">К результату</button><button class="btn btn-line" id="home">К предмету</button></div>`;
   app.querySelector("#redo").onclick = redoWrong;
   app.querySelector("#back").onclick = results;
-  app.querySelector("#home").onclick = () => { test = null; home(); };
+  app.querySelector("#home").onclick = subjectHome;
   top0();
 }
-function plural(n, a, b, c){ const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? a : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? b : c; }
 
-/* ---------- STUDY ---------- */
+/* ---------- 4. учить: вопрос → ответ ---------- */
 function studyView(){
+  const wrongN = SUB.qs.filter(isWrong).length;
+  const memos = SUB.sets.map(s => s.memo).filter(Boolean);
   app.innerHTML = `
     <div class="qbar">
-      <div class="row between"><button class="btn btn-line" id="home" style="min-height:40px;padding:8px 14px">На главную</button><span class="eyebrow">Вопрос → ответ</span></div>
-      <input class="search" id="s" type="search" placeholder="Поиск по словам: медиана, Стьюдент, выборка…" value="${esc(study.q)}" autocomplete="off">
+      <div class="row between"><button class="btn btn-line back" id="home">← ${esc(SUB.name)}</button><span class="eyebrow">Вопрос → ответ</span></div>
+      <input class="search" id="s" type="search" placeholder="Поиск по словам" value="${esc(study.q)}" autocomplete="off">
       <div class="chips-scroll">
-        <button class="chip" data-t="all" aria-pressed="${study.topic==="all"}">Все</button>
-        ${TOPICS.map((t,i) => `<button class="chip" data-t="${i}" aria-pressed="${study.topic===String(i)}">${t}</button>`).join("")}
-        ${store.wrong.length ? `<button class="chip" data-w="1" aria-pressed="${study.onlyWrong}" style="color:var(--red)">Мои ошибки · ${store.wrong.length}</button>` : ""}
+        <button class="chip" data-t="all" aria-pressed="${study.topic==="all" && !study.onlyWrong}">Все</button>
+        ${wrongN ? `<button class="chip" data-w="1" aria-pressed="${study.onlyWrong}" style="color:var(--red)">Мои ошибки · ${wrongN}</button>` : ""}
+        ${topicsOf(SUB.qs).map(t => `<button class="chip" data-t="${esc(t)}" aria-pressed="${study.topic===t && !study.onlyWrong}">${esc(t)}</button>`).join("")}
       </div>
       <label class="switch"><input type="checkbox" id="hide" ${study.hide?"checked":""}> Скрыть ответы (проверить себя)</label>
     </div>
-    ${SET.memo ? `<section class="sheet memo"><span class="eyebrow">Запомнить сначала</span>${SET.memo}</section>` : ""}
+    ${memos.map(m => `<section class="sheet memo"><span class="eyebrow">Запомнить сначала</span>${m}</section>`).join("")}
     <div id="cards" style="display:flex;flex-direction:column;gap:12px"></div>`;
   const s = app.querySelector("#s");
   s.oninput = () => { study.q = s.value; cards(); };
   app.querySelectorAll("[data-t]").forEach(b => b.onclick = () => { study.topic = b.dataset.t; study.onlyWrong = false; studyView(); });
   const w = app.querySelector("[data-w]"); if (w) w.onclick = () => { study.onlyWrong = !study.onlyWrong; study.topic = "all"; studyView(); };
   app.querySelector("#hide").onchange = e => { study.hide = e.target.checked; study.open = new Set(); cards(); };
-  app.querySelector("#home").onclick = home;
-  cards();
+  app.querySelector("#home").onclick = subjectHome;
+  cards(); top0();
 }
 function cards(){
   const qq = study.q.trim().toLowerCase();
-  let list = QS;
-  if (study.onlyWrong) list = list.filter(q => store.wrong.includes(q.id));
-  else if (study.topic !== "all") list = list.filter(q => q.t === TOPICS[+study.topic]);
+  let list = SUB.qs;
+  if (study.onlyWrong) list = list.filter(isWrong);
+  else if (study.topic !== "all") list = list.filter(q => q.t === study.topic);
   if (qq) list = list.filter(q => (q.q + " " + q.o[q.a]).toLowerCase().includes(qq));
   const box = app.querySelector("#cards");
   if (!list.length) { box.innerHTML = `<p class="empty">Ничего не найдено.</p>`; return; }
   box.innerHTML = list.map(q => {
-    const shown = !study.hide || study.open.has(q.id);
+    const shown = !study.hide || study.open.has(q.key);
+    const s = st(q.key);
     return `<article class="sheet card">
-      <span class="tag">№ ${q.id} · ${esc(q.t || "")}</span>
+      <span class="tag">№ ${q.id} · ${esc(q.t)}${s.s ? ` · ${s.r}✓ ${s.w}✗` : ""}</span>
       <p class="qtext" style="font-size:17px">${esc(q.q)}</p>
       ${shown ? `<div class="ansbox">${q.tf ? (q.a === 0 ? "✓ Верно" : "✗ Неверно") : esc(q.o[q.a])}</div>${q.n ? `<p class="note">${esc(q.n)}</p>` : ""}`
-              : `<button class="ansbox hidden-ans" data-open="${q.id}">Показать ответ</button>`}
+              : `<button class="ansbox hidden-ans" data-open="${esc(q.key)}">Показать ответ</button>`}
     </article>`;
   }).join("");
-  box.querySelectorAll("[data-open]").forEach(b => b.onclick = () => { study.open.add(+b.dataset.open); cards(); });
+  box.querySelectorAll("[data-open]").forEach(b => b.onclick = () => { study.open.add(b.dataset.open); cards(); });
 }
 
-if (SETS.length) home(); else app.innerHTML = '<p class="empty">Тесты не найдены.</p>';
+if (SUBJ.length) subjects(); else app.innerHTML = '<p class="empty">Тесты не найдены.</p>';
 </script>
 
 </body>
