@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Добавить студента</title>
+<meta name="robots" content="noindex">
+<style>
+:root { --paper:#F3F5F9; --sheet:#fff; --ink:#15213A; --muted:#5A6880; --line:#DAE0EA; --pen:#2445C7; --ok:#17734A; --red:#C62F27; }
+@media (prefers-color-scheme: dark) { :root { --paper:#0E131B; --sheet:#161D28; --ink:#E7ECF4; --muted:#95A3B8; --line:#283245; --pen:#8EA2FF; --ok:#4FC48C; --red:#FF7D72; color-scheme: dark; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 24px max(16px, env(safe-area-inset-left)); }
+main { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+h1 { margin: 0; font-size: 26px; }
+.sheet { background: var(--sheet); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+label { font-size: 14px; font-weight: 600; color: var(--muted); }
+input { min-height: 46px; padding: 10px 14px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--sheet); color: var(--ink); font: inherit; }
+button { min-height: 48px; border: 0; border-radius: 12px; background: var(--pen); color: #fff; font: 600 16px/1 inherit; cursor: pointer; }
+pre { margin: 0; padding: 12px; border-radius: 10px; background: var(--paper); border: 1px solid var(--line); white-space: pre-wrap; word-break: break-all; font: 14px/1.5 ui-monospace, Menlo, monospace; }
+p { margin: 0; color: var(--muted); }
+ol { margin: 0; padding-left: 20px; color: var(--muted); }
+code { font-family: ui-monospace, Menlo, monospace; color: var(--ink); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Добавить студента</h1>
+  <p>Пароль никуда не отправляется. Страница считает его отпечаток прямо в браузере.</p>
+  <form class="sheet" id="f">
+    <label for="lg">Логин (латиницей, без пробелов)</label>
+    <input id="lg" required autocapitalize="none" spellcheck="false" placeholder="ivanov">
+    <label for="nm">Имя студента</label>
+    <input id="nm" placeholder="Иванов Иван">
+    <label for="pw">Пароль</label>
+    <input id="pw" required placeholder="придумайте пароль">
+    <button type="submit">Получить строку</button>
+  </form>
+  <section class="sheet" id="out" hidden>
+    <p>Скопируйте строку и вставьте её в файл <code>users.js</code> внутрь <code>window.USERS = [ ... ]</code>:</p>
+    <pre id="line"></pre>
+    <button type="button" id="copy">Скопировать</button>
+    <ol>
+      <li>Откройте <code>users.js</code> в репозитории и нажмите карандаш (Edit).</li>
+      <li>Вставьте строку новой строкой перед <code>];</code>.</li>
+      <li>Нажмите Commit changes. Через минуту студент сможет войти.</li>
+    </ol>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+async function hashOf(login, pass){
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(login.trim().toLowerCase() + ":" + pass));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+$("f").onsubmit = async e => {
+  e.preventDefault();
+  const login = $("lg").value.trim().toLowerCase().replace(/\s+/g, ""), name = $("nm").value.trim().replace(/"/g, "'"), pass = $("pw").value;
+  const h = await hashOf(login, pass);
+  $("line").textContent = `  { login: "${login}", name: "${name || login}", hash: "${h}" },`;
+  $("out").hidden = false;
+};
+$("copy").onclick = async () => {
+  try { await navigator.clipboard.writeText($("line").textContent); $("copy").textContent = "Скопировано"; }
+  catch (e) { const r = document.createRange(); r.selectNodeContents($("line")); const s = getSelection(); s.removeAllRanges(); s.addRange(r); $("copy").textContent = "Выделено, нажмите Копировать"; }
+};
+</script>
+</body>
+</html>

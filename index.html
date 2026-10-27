@@ -179,6 +179,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 </head>
 <body>
 <div class="wrap" id="app"></div>
+<script src="users.js"></script>
 <!-- Тесты: каждый файл test-*.js добавляет один тест -->
 <script src="test-medstat.js"></script>
 
@@ -198,17 +199,23 @@ const byKey = Object.fromEntries(ALL.map(q => [q.key, q]));
 const LET = ["А","Б","В","Г","Д","Е"];
 const KEY = "trainer.v2";
 
-/* ---------- память ---------- */
-function load(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch(e){ return {}; } }
-let db = Object.assign({ stats: {}, last: {}, mode: "prep" }, load());
-try { // перенос ошибок из прошлой версии
-  const old = JSON.parse(localStorage.getItem("tests.v1"));
-  if (old && old.sets && !db.migrated) {
-    Object.entries(old.sets).forEach(([sid, st]) => (st.wrong || []).forEach(id => { db.stats[sid + ":" + id] = { s: 1, r: 0, w: 1, b: 1, l: 0 }; }));
-    db.migrated = 1;
-  }
-} catch(e){}
-function save(){ try { localStorage.setItem(KEY, JSON.stringify(db)); } catch(e){} }
+/* ---------- студенты и память (у каждого своя) ---------- */
+const USERS = (window.USERS || []).filter(u => u && u.login && u.hash);
+const SESSION = "trainer.session";
+let USER = null, db = null;
+function lsGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+function lsSet(k, v){ try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch(e){} }
+function openUser(u){
+  USER = u;
+  let saved = {}; try { saved = JSON.parse(lsGet(KEY + ":" + u.login.toLowerCase())) || {}; } catch(e){}
+  db = Object.assign({ stats: {}, last: {}, mode: "prep" }, saved);
+}
+function save(){ if (USER) lsSet(KEY + ":" + USER.login.toLowerCase(), JSON.stringify(db)); }
+async function hashOf(login, pass){
+  const data = new TextEncoder().encode(login.trim().toLowerCase() + ":" + pass);
+  const buf = await crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
 const st = key => db.stats[key] || { s: 0, r: 0, w: 0, b: 0, l: null };
 function record(q, ok){
   const s = Object.assign({}, st(q.key));
@@ -244,22 +251,58 @@ function plural(n, a, b, c){ const m10 = n % 10, m100 = n % 100; return m10 === 
 function gradeOf(p){ return p >= 0.9 ? 5 : p >= 0.75 ? 4 : p >= 0.6 ? 3 : 2; }
 
 let SUB = null;          // выбранный предмет
-let ui = { count: 20, topic: "all", part: "all" };
+const N = 25;            // в каждом тесте строго 25 вопросов
+let ui = { part: "all" };
 let test = null;
 let study = { topic: "all", part: "all", q: "", hide: false, onlyWrong: false, open: new Set() };
 
 function topicsOf(qs){ return [...new Set(qs.map(q => q.t).filter(Boolean))]; }
-function poolOf(){
-  let p = SUB.qs;
-  if (ui.part !== "all") p = p.filter(q => q.set === ui.part);
-  if (ui.topic !== "all") p = p.filter(q => q.t === ui.topic);
-  return p;
+function poolOf(){ return ui.part === "all" ? SUB.qs : SUB.qs.filter(q => q.set === ui.part); }
+/* ровно 25: сначала обязательные вопросы (например, ошибки), остальное добираем */
+function build25(mode, must){
+  const pool = poolOf();
+  const first = shuffle((must || []).filter(q => pool.includes(q))).slice(0, N);
+  const rest = pool.filter(q => !first.includes(q));
+  const k = Math.min(N - first.length, rest.length);
+  const add = mode === "prep" ? smartPick(rest, k) : shuffle(rest).slice(0, k);
+  return shuffle(first.concat(add));
 }
 
 /* ---------- 1. выбор предмета ---------- */
+/* ---------- 0. вход ---------- */
+function loginView(msg){
+  USER = null; db = null; SUB = null; test = null;
+  app.innerHTML = `
+    <header class="hero">
+      <span class="eyebrow">Тренажёр тестов</span>
+      <h1>Вход</h1>
+      <p>Логин и пароль выдаёт преподаватель.</p>
+    </header>
+    <form class="sheet" id="lf" autocomplete="on">
+      <label class="label" for="lg">Логин</label>
+      <input class="search" id="lg" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      <label class="label" for="pw">Пароль</label>
+      <input class="search" id="pw" name="password" type="password" autocomplete="current-password" required>
+      ${msg ? `<p style="color:var(--red);font-weight:600">${esc(msg)}</p>` : ""}
+      <button class="btn btn-main btn-wide" type="submit">Войти</button>
+    </form>`;
+  app.querySelector("#lf").onsubmit = async e => {
+    e.preventDefault();
+    const login = app.querySelector("#lg").value.trim(), pass = app.querySelector("#pw").value;
+    let h = ""; try { h = await hashOf(login, pass); } catch(err) { return loginView("Браузер не поддерживает вход. Откройте сайт в Chrome или Safari."); }
+    const u = USERS.find(x => x.login.toLowerCase() === login.toLowerCase() && x.hash === h);
+    if (!u) return loginView("Неверный логин или пароль.");
+    lsSet(SESSION, u.login.toLowerCase());
+    openUser(u); subjects();
+  };
+  top0();
+}
+function logout(){ lsSet(SESSION, null); loginView(); }
+
 function subjects(){
   SUB = null; test = null;
   app.innerHTML = `
+    <div class="row between"><span class="last">Студент: <b style="color:var(--ink)">${esc(USER.name || USER.login)}</b></span><button class="btn btn-line back" id="logout">Выйти</button></div>
     <header class="hero">
       <span class="eyebrow">Тренажёр тестов</span>
       <h1>Выберите предмет</h1>
@@ -271,7 +314,8 @@ function subjects(){
         <span class="meta">${s.qs.length} ${plural(s.qs.length, "вопрос", "вопроса", "вопросов")} · освоено ${m}</span>
         <div class="track" aria-hidden="true"><i style="width:${pct(m, s.qs.length)}%"></i></div></button>`;
     }).join("")}`;
-  app.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { SUB = SUBJ[+b.dataset.s]; ui.topic = "all"; ui.part = "all"; study = { topic: "all", part: "all", q: "", hide: study.hide, onlyWrong: false, open: new Set() }; subjectHome(); });
+  app.querySelector("#logout").onclick = logout;
+  app.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { SUB = SUBJ[+b.dataset.s]; ui.part = "all"; study = { topic: "all", part: "all", q: "", hide: study.hide, onlyWrong: false, open: new Set() }; subjectHome(); });
   top0();
 }
 
@@ -281,9 +325,6 @@ function subjectHome(){
   const qs = SUB.qs, total = qs.length;
   const mastered = qs.filter(isMastered).length, wrongN = qs.filter(isWrong).length, seen = qs.filter(q => st(q.key).s).length;
   const ts = topicStats(qs).filter(x => x.tries).sort((a, b) => a.acc - b.acc);
-  const pool = poolOf();
-  const counts = [...new Set([20, 50].filter(c => c < pool.length).concat(pool.length))];
-  if (!counts.includes(ui.count)) ui.count = counts[0];
   const prep = db.mode === "prep";
   const last = db.last[SUB.name];
   app.innerHTML = `
@@ -306,17 +347,13 @@ function subjectHome(){
         <button data-mode="prep" aria-pressed="${prep}"><b>Подготовка</b><small>ответ сразу после вопроса</small></button>
         <button data-mode="exam" aria-pressed="${!prep}"><b>Экзамен</b><small>ответы только в конце</small></button>
       </div>
-      <p class="muted" style="font-size:14px">${prep ? "Чаще попадаются вопросы, где вы ошибались, и слабые темы." : "Вопросы выбираются случайно, как на настоящем экзамене."}</p>
+      <p class="muted" style="font-size:14px">В каждом тесте ровно ${N} вопросов. ${prep ? "Чаще попадаются вопросы, где вы ошибались, и слабые темы." : "Вопросы выбираются случайно, как на настоящем экзамене."}</p>
       ${SUB.sets.length > 1 ? `<div><div class="label">Тест</div><div class="row" style="margin-top:8px">
         <button class="chip" data-part="all" aria-pressed="${ui.part==="all"}">Все</button>
         ${SUB.sets.map(s => `<button class="chip" data-part="${esc(s.id)}" aria-pressed="${ui.part===s.id}">${esc(s.short || s.title)}</button>`).join("")}</div></div>` : ""}
-      <div><div class="label">Тема</div><div class="row" style="margin-top:8px">
-        <button class="chip" data-topic="all" aria-pressed="${ui.topic==="all"}">Все темы</button>
-        ${topicsOf(SUB.qs.filter(q => ui.part === "all" || q.set === ui.part)).map(t => `<button class="chip" data-topic="${esc(t)}" aria-pressed="${ui.topic===t}">${esc(t)}</button>`).join("")}</div></div>
-      <div><div class="label">Сколько вопросов</div><div class="row" style="margin-top:8px">
-        ${counts.map(c => `<button class="chip" data-count="${c}" aria-pressed="${ui.count===c}">${c === pool.length ? `Все ${c}` : c}</button>`).join("")}</div></div>
-      <button class="btn btn-main btn-wide" id="go">${prep ? "Начать подготовку" : "Начать экзамен"}</button>
-      ${wrongN ? `<button class="btn btn-line btn-wide" id="goWrong" style="color:var(--red);border-color:var(--red)">Решить только мои ошибки · ${wrongN}</button>` : ""}
+      <button class="btn btn-main btn-wide" id="go">${prep ? "Начать подготовку" : "Начать экзамен"} · ${N} вопросов</button>
+      ${wrongN ? `<button class="btn btn-line btn-wide" id="goWrong" style="color:var(--red);border-color:var(--red)">Сначала мои ошибки · ${wrongN}</button>
+        <p class="muted" style="font-size:13.5px;margin-top:-6px">Все вопросы с ошибкой${wrongN < N ? `, остальные до ${N} подберутся сами` : ` (первые ${N})`}.</p>` : ""}
     </section>
 
     <section class="sheet">
@@ -326,11 +363,9 @@ function subjectHome(){
     </section>`;
   app.querySelector("#toSubj").onclick = subjects;
   app.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { db.mode = b.dataset.mode; save(); subjectHome(); });
-  app.querySelectorAll("[data-part]").forEach(b => b.onclick = () => { ui.part = b.dataset.part; ui.topic = "all"; subjectHome(); });
-  app.querySelectorAll("[data-topic]").forEach(b => b.onclick = () => { ui.topic = b.dataset.topic; subjectHome(); });
-  app.querySelectorAll("[data-count]").forEach(b => b.onclick = () => { ui.count = +b.dataset.count; subjectHome(); });
-  app.querySelector("#go").onclick = () => { const p = poolOf(); startTest(db.mode === "prep" ? smartPick(p, ui.count) : shuffle(p).slice(0, ui.count), db.mode); };
-  const gw = app.querySelector("#goWrong"); if (gw) gw.onclick = () => startTest(shuffle(SUB.qs.filter(isWrong)), db.mode);
+  app.querySelectorAll("[data-part]").forEach(b => b.onclick = () => { ui.part = b.dataset.part; subjectHome(); });
+  app.querySelector("#go").onclick = () => startTest(build25(db.mode), db.mode);
+  const gw = app.querySelector("#goWrong"); if (gw) gw.onclick = () => startTest(build25(db.mode, SUB.qs.filter(isWrong)), db.mode);
   app.querySelector("#goStudy").onclick = () => { study.open = new Set(); studyView(); };
   top0();
 }
@@ -409,16 +444,16 @@ function results(){
       <div class="topics">${per.map(r => `<div class="trow"><span>${esc(r.t)}</span><b>${r.ok}/${r.n}</b><div class="track"><i style="width:${r.ok/r.n*100}%"></i></div></div>`).join("")}</div>
     </section>
     ${bad ? `<button class="btn btn-red btn-wide" id="review">Работа над ошибками · ${bad}</button>
-             <button class="btn btn-line btn-wide" id="redo">Решить ошибки заново</button>`
+             <button class="btn btn-line btn-wide" id="redo">Ошибки заново + новые до ${N}</button>`
           : `<div class="sheet all-good"><h2>Без единой ошибки</h2><p class="muted">Можно брать следующий набор.</p></div>`}
     <div class="qnav"><button class="btn btn-line" id="home">К предмету</button><button class="btn btn-main" id="again">Ещё тест</button></div>`;
   const rv = app.querySelector("#review"); if (rv) rv.onclick = review;
   const rd = app.querySelector("#redo"); if (rd) rd.onclick = redoWrong;
   app.querySelector("#home").onclick = subjectHome;
-  app.querySelector("#again").onclick = () => { const p = poolOf(); startTest(db.mode === "prep" ? smartPick(p, ui.count) : shuffle(p).slice(0, ui.count), db.mode); };
+  app.querySelector("#again").onclick = () => startTest(build25(db.mode), db.mode);
   top0();
 }
-function redoWrong(){ startTest(shuffle(test.done.counted.filter(x => x.pick !== x.q.a).map(x => x.q)), test.mode); }
+function redoWrong(){ startTest(build25(test.mode, test.done.counted.filter(x => x.pick !== x.q.a).map(x => x.q)), test.mode); }
 function review(){
   const bad = test.done.counted.filter(x => x.pick !== x.q.a);
   app.innerHTML = `
@@ -434,7 +469,7 @@ function review(){
         </div>
         ${x.q.n ? `<p class="note">${esc(x.q.n)}</p>` : ""}
       </article>`).join("")}
-    <button class="btn btn-red btn-wide" id="redo">Решить эти ${bad.length} заново</button>
+    <button class="btn btn-red btn-wide" id="redo">Решить заново: эти ${bad.length} + новые до ${N}</button>
     <div class="qnav"><button class="btn btn-line" id="back">К результату</button><button class="btn btn-line" id="home">К предмету</button></div>`;
   app.querySelector("#redo").onclick = redoWrong;
   app.querySelector("#back").onclick = results;
@@ -488,7 +523,9 @@ function cards(){
   box.querySelectorAll("[data-open]").forEach(b => b.onclick = () => { study.open.add(b.dataset.open); cards(); });
 }
 
-if (SUBJ.length) subjects(); else app.innerHTML = '<p class="empty">Тесты не найдены.</p>';
+if (!SUBJ.length) app.innerHTML = '<p class="empty">Тесты не найдены.</p>';
+else if (!USERS.length) app.innerHTML = '<p class="empty">Список студентов пуст. Добавьте логины в users.js.</p>';
+else { const u = USERS.find(x => x.login.toLowerCase() === lsGet(SESSION)); if (u) { openUser(u); subjects(); } else loginView(); }
 </script>
 
 </body>
