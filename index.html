@@ -179,6 +179,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 </head>
 <body>
 <div class="wrap" id="app"></div>
+<script src="config.js"></script>
 <script src="users.js"></script>
 <!-- Тесты: каждый файл test-*.js добавляет один тест -->
 <script src="test-medstat.js"></script>
@@ -202,15 +203,49 @@ const KEY = "trainer.v2";
 /* ---------- студенты и память (у каждого своя) ---------- */
 const USERS = (window.USERS || []).filter(u => u && u.login && u.hash);
 const SESSION = "trainer.session";
-let USER = null, db = null;
+let USER = null, db = null, HASH = "";
+const SYNC = window.SYNC_URL || "";
+let syncTimer = null;
 function lsGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
 function lsSet(k, v){ try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch(e){} }
-function openUser(u){
-  USER = u;
+function openUser(u, hash){
+  USER = u; HASH = hash;
   let saved = {}; try { saved = JSON.parse(lsGet(KEY + ":" + u.login.toLowerCase())) || {}; } catch(e){}
   db = Object.assign({ stats: {}, last: {}, mode: "prep" }, saved);
 }
-function save(){ if (USER) lsSet(KEY + ":" + USER.login.toLowerCase(), JSON.stringify(db)); }
+function saveLocal(){ if (USER) lsSet(KEY + ":" + USER.login.toLowerCase(), JSON.stringify(db)); }
+function save(){ saveLocal(); pushRemote(); }
+
+/* ---------- синхронизация с Google Таблицей (по логину) ---------- */
+async function api(body){
+  const r = await fetch(SYNC, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) });
+  return r.json();
+}
+function pushRemote(result){
+  if (!SYNC || !USER) return;
+  const send = () => api({ action: "save", login: USER.login, hash: HASH, name: USER.name || USER.login, db, result }).catch(() => {});
+  clearTimeout(syncTimer);
+  if (result) send(); else syncTimer = setTimeout(send, 1500);
+}
+function mergeDb(local, remote){
+  if (!remote || !remote.stats) return local;
+  const out = Object.assign({}, remote, { stats: Object.assign({}, remote.stats), last: Object.assign({}, remote.last || {}, local.last || {}) });
+  Object.entries(local.stats || {}).forEach(([k, v]) => { const r = out.stats[k]; if (!r || (v.s || 0) > (r.s || 0)) out.stats[k] = v; });
+  out.mode = local.mode || remote.mode || "prep";
+  return out;
+}
+async function pullRemote(){
+  if (!SYNC || !USER) return;
+  try {
+    const r = await api({ action: "load", login: USER.login, hash: HASH });
+    if (r && r.ok) { db = mergeDb(db, r.db); saveLocal(); pushRemote(); }
+  } catch(e){}
+}
+async function enter(u, hash){
+  openUser(u, hash);
+  if (SYNC) { app.innerHTML = '<p class="empty">Загружаю вашу статистику…</p>'; await Promise.race([pullRemote(), new Promise(r => setTimeout(r, 6000))]); }
+  subjects();
+}
 async function hashOf(login, pass){
   const data = new TextEncoder().encode(login.trim().toLowerCase() + ":" + pass);
   const buf = await crypto.subtle.digest("SHA-256", data);
@@ -292,8 +327,8 @@ function loginView(msg){
     let h = ""; try { h = await hashOf(login, pass); } catch(err) { return loginView("Браузер не поддерживает вход. Откройте сайт в Chrome или Safari."); }
     const u = USERS.find(x => x.login.toLowerCase() === login.toLowerCase() && x.hash === h);
     if (!u) return loginView("Неверный логин или пароль.");
-    lsSet(SESSION, u.login.toLowerCase());
-    openUser(u); subjects();
+    lsSet(SESSION, JSON.stringify({ login: u.login.toLowerCase(), hash: h }));
+    enter(u, h);
   };
   top0();
 }
@@ -427,7 +462,16 @@ function finishCommon(partial){
   const counted = test.mode === "prep" ? items.filter(x => x.checked) : items;
   const ok = counted.filter(x => x.pick === x.q.a).length;
   if (counted.length) db.last[SUB.name] = { ok, total: counted.length };
-  save();
+  saveLocal();
+  if (counted.length) {
+    const bad = counted.filter(x => x.pick !== x.q.a);
+    const weak = {}; bad.forEach(x => { const t = x.q.t || "Без темы"; weak[t] = (weak[t] || 0) + 1; });
+    pushRemote({
+      subject: SUB.name, mode: test.mode, partial: !!partial, ok, total: counted.length, grade: gradeOf(ok / counted.length),
+      weak: Object.entries(weak).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t} (${n})`).join(", "),
+      wrong: bad.map(x => (SUB.sets.length > 1 ? x.q.part + " " : "") + "№" + x.q.id).join(", ")
+    });
+  } else pushRemote();
   return { ok, counted };
 }
 function finish(){ const r = finishCommon(); test.done = r; results(); }
@@ -525,7 +569,11 @@ function cards(){
 
 if (!SUBJ.length) app.innerHTML = '<p class="empty">Тесты не найдены.</p>';
 else if (!USERS.length) app.innerHTML = '<p class="empty">Список студентов пуст. Добавьте логины в users.js.</p>';
-else { const u = USERS.find(x => x.login.toLowerCase() === lsGet(SESSION)); if (u) { openUser(u); subjects(); } else loginView(); }
+else {
+  let sess = null; try { sess = JSON.parse(lsGet(SESSION)); } catch(e){}
+  const u = sess && USERS.find(x => x.login.toLowerCase() === sess.login && x.hash === sess.hash);
+  if (u) enter(u, sess.hash); else loginView();
+}
 </script>
 
 </body>
