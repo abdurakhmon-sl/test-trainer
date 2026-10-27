@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Тренажёр тестов</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600&family=Unbounded:wght@500;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: one narrow column like an exam sheet; ballpoint ink for the work, a teacher's red pen for mistakes. */
+:root {
+  --paper: #F3F5F9;
+  --sheet: #FFFFFF;
+  --ink: #15213A;
+  --muted: #5A6880;
+  --line: #DAE0EA;
+  --pen: #2445C7;
+  --pen-soft: #E6EBFB;
+  --ok: #17734A;
+  --ok-soft: #E3F3EA;
+  --red: #C62F27;
+  --red-soft: #FBE8E6;
+  --f-display: "Unbounded", "Golos Text", system-ui, sans-serif;
+  --f-body: "Golos Text", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --r: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0E131B; --sheet: #161D28; --ink: #E7ECF4; --muted: #95A3B8; --line: #283245;
+    --pen: #8EA2FF; --pen-soft: #1E2744; --ok: #4FC48C; --ok-soft: #12291F; --red: #FF7D72; --red-soft: #33191A;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0E131B; --sheet: #161D28; --ink: #E7ECF4; --muted: #95A3B8; --line: #283245;
+  --pen: #8EA2FF; --pen-soft: #1E2744; --ok: #4FC48C; --ok-soft: #12291F; --red: #FF7D72; --red-soft: #33191A;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+  background: var(--paper); color: var(--ink);
+  font: 16px/1.5 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  -webkit-tap-highlight-color: transparent;
+}
+.wrap { max-width: 640px; margin: 0 auto; padding-block: 20px 48px; display: flex; flex-direction: column; gap: 18px; }
+h1, h2 { font-family: var(--f-display); font-weight: 700; letter-spacing: -0.01em; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(26px, 7vw, 36px); line-height: 1.1; }
+h2 { font-size: 18px; line-height: 1.25; }
+p { margin: 0; }
+.eyebrow { font: 500 12px/1 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.muted { color: var(--muted); }
+.sheet { background: var(--sheet); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.between { justify-content: space-between; }
+button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; }
+button:focus-visible, input:focus-visible { outline: 3px solid var(--pen); outline-offset: 2px; }
+.btn { min-height: 48px; padding: 12px 18px; border-radius: 12px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-align: center; }
+.btn-main { background: var(--pen); color: var(--sheet); }
+.btn-red { background: var(--red); color: var(--sheet); }
+.btn-line { border: 1.5px solid var(--line); background: var(--sheet); }
+.btn-wide { width: 100%; }
+.btn:disabled { opacity: .45; cursor: default; }
+.chip { min-height: 40px; padding: 8px 14px; border-radius: 999px; border: 1.5px solid var(--line); background: var(--sheet); font-weight: 500; font-size: 15px; }
+.chip[aria-pressed="true"] { border-color: var(--pen); background: var(--pen-soft); color: var(--pen); }
+.label { font-size: 14px; font-weight: 600; color: var(--muted); }
+
+/* home */
+.hero { display: flex; flex-direction: column; gap: 10px; padding-top: 8px; }
+.hero p { color: var(--muted); max-width: 46ch; }
+.mode-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.last { font: 500 13px/1.3 var(--f-mono); color: var(--muted); }
+
+/* quiz */
+.qbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--paper); padding-block: 10px; display: flex; flex-direction: column; gap: 10px; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--paper); }
+.counter { font: 500 15px/1 var(--f-mono); font-variant-numeric: tabular-nums; }
+.track { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; }
+.track > i { display: block; height: 100%; background: var(--pen); border-radius: 99px; transition: width .25s ease; }
+.qtext { font-size: 19px; line-height: 1.45; font-weight: 500; }
+.tag { font: 500 12px/1 var(--f-mono); letter-spacing: .04em; color: var(--muted); }
+.opts { display: flex; flex-direction: column; gap: 10px; }
+.opt { display: grid; grid-template-columns: 34px 1fr; gap: 12px; align-items: start; text-align: left; padding: 14px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--sheet); min-height: 56px; }
+.opt .let { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font: 600 15px/1 var(--f-mono); border: 1.5px solid var(--line); color: var(--muted); }
+.opt span:last-child { padding-top: 5px; min-width: 0; }
+.opt[aria-checked="true"] { border-color: var(--pen); background: var(--pen-soft); }
+.opt[aria-checked="true"] .let { background: var(--pen); border-color: var(--pen); color: var(--sheet); }
+.opts.tf { flex-direction: row; }
+.opts.tf .opt { flex: 1; grid-template-columns: 1fr; justify-items: center; font-weight: 600; font-size: 18px; }
+.opts.tf .opt .let { display: none; }
+.opts.tf .opt span:last-child { padding-top: 2px; }
+.qnav { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.exit-warn { color: var(--red); font-weight: 600; }
+
+/* results */
+.grade-wrap { display: flex; gap: 20px; align-items: center; }
+.grade { flex: none; width: 96px; height: 96px; display: grid; place-items: center; font: 700 52px/1 var(--f-display); color: var(--red); border: 3px solid var(--red); border-radius: 50% 46% 52% 44% / 48% 54% 46% 52%; transform: rotate(-6deg); }
+.score { font: 700 30px/1.1 var(--f-display); font-variant-numeric: tabular-nums; }
+.topics { display: flex; flex-direction: column; gap: 8px; }
+.trow { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; font-size: 14px; }
+.trow .track { grid-column: 1 / -1; height: 5px; }
+.trow .track > i { background: var(--ok); }
+.trow b { font: 500 13px/1.4 var(--f-mono); font-variant-numeric: tabular-nums; }
+
+/* review */
+.err { border-left: 3px solid var(--red); }
+.err-head { display: flex; justify-content: space-between; gap: 10px; }
+.mark { font: 600 12px/1 var(--f-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--red); }
+.ans { display: grid; gap: 8px; }
+.ans div { border-radius: 10px; padding: 10px 12px; font-size: 15px; }
+.ans .yours { background: var(--red-soft); }
+.ans .yours s { text-decoration-color: var(--red); text-decoration-thickness: 2px; }
+.ans .right { background: var(--ok-soft); }
+.ans small { display: block; font: 600 11px/1.4 var(--f-mono); letter-spacing: .06em; text-transform: uppercase; margin-bottom: 2px; }
+.ans .yours small { color: var(--red); }
+.ans .right small { color: var(--ok); }
+.note { font-style: italic; color: var(--red); font-size: 15px; padding-left: 12px; border-left: 2px dotted var(--red); }
+.all-good { text-align: center; padding: 28px 18px; }
+
+/* study */
+.memo ol { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.memo li::marker { font-family: var(--f-mono); color: var(--pen); font-weight: 600; }
+.memo b { color: var(--pen); }
+.search { width: 100%; min-height: 46px; padding: 10px 14px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--sheet); color: var(--ink); font: inherit; }
+.chips-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+.chips-scroll .chip { flex: none; }
+.card { gap: 10px; }
+.card .ansbox { background: var(--ok-soft); border-radius: 10px; padding: 10px 12px; font-weight: 600; color: var(--ok); }
+.card .ansbox.hidden-ans { background: var(--pen-soft); color: var(--pen); font-weight: 500; text-align: center; cursor: pointer; }
+.card .note { color: var(--muted); border-left-color: var(--muted); }
+.switch { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 500; cursor: pointer; }
+.switch input { width: 22px; height: 22px; accent-color: var(--pen); }
+.empty { text-align: center; color: var(--muted); padding: 24px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<!-- Тесты: каждый файл test-*.js добавляет один тест -->
+<script src="test-medstat.js"></script>
+
+<script>
+const SETS = (window.TESTS || []).filter(t => t && t.questions && t.questions.length);
+const LET = ["А","Б","В","Г","Д","Е"];
+const KEY = "tests.v1";
+function load(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch(e){ return {}; } }
+function save(){ try { localStorage.setItem(KEY, JSON.stringify(db)); } catch(e){} }
+let db = Object.assign({ cur: null, sets: {} }, load());
+let SET, QS, TOPICS, byId, store;
+function useSet(id){
+  SET = SETS.find(t => t.id === id) || SETS[0];
+  QS = SET.questions;
+  TOPICS = [...new Set(QS.map(q => q.t).filter(Boolean))];
+  byId = Object.fromEntries(QS.map(q => [q.id, q]));
+  store = db.sets[SET.id] = Object.assign({ wrong: [], last: null }, db.sets[SET.id]);
+  db.cur = SET.id; save();
+  ui.topic = "all"; study = { topic: "all", q: "", hide: study.hide, onlyWrong: false, open: new Set() };
+}
+
+const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const app = document.getElementById("app");
+const top0 = () => window.scrollTo(0, 0);
+
+let ui = { count: 20, topic: "all" };
+let test = null;
+let study = { topic: "all", q: "", hide: false, onlyWrong: false, open: new Set() };
+if (SETS.length) useSet(db.cur);
+
+/* ---------- HOME ---------- */
+function home(){
+  const wrongN = store.wrong.length;
+  const total = QS.length;
+  const counts = [...new Set([20, 50].filter(c => c < total).concat(total))];
+  if (!counts.includes(ui.count)) ui.count = counts[0];
+  app.innerHTML = `
+    <header class="hero">
+      <span class="eyebrow">${esc(SET.subject || "Тренажёр")}</span>
+      <h1>${esc(SET.title)}</h1>
+      <p>Вопросы каждый раз идут в новом порядке, варианты ответов тоже перемешаны. В конце будет оценка и работа над ошибками.</p>
+    </header>
+    ${SETS.length > 1 ? `<section class="sheet"><div class="label">Какой тест решаем</div>
+      <div class="row">${SETS.map(t => `<button class="chip" data-set="${esc(t.id)}" aria-pressed="${t.id===SET.id}">${esc(t.short || t.title)} · ${t.questions.length}</button>`).join("")}</div></section>` : ""}
+
+    <section class="sheet" aria-labelledby="h-test">
+      <div class="mode-head"><h2 id="h-test">Тест</h2>${store.last ? `<span class="last">прошлый: ${store.last.ok}/${store.last.total}</span>` : ""}</div>
+      <div><div class="label">Сколько вопросов</div>
+        <div class="row" style="margin-top:8px">${counts.map(c => `<button class="chip" data-count="${c}" aria-pressed="${ui.count===c}">${c === total ? `Все ${total}` : c}</button>`).join("")}</div></div>
+      <div><div class="label">Тема</div>
+        <div class="row" style="margin-top:8px"><button class="chip" data-topic="all" aria-pressed="${ui.topic==="all"}">Все темы</button>${TOPICS.map((t,i) => `<button class="chip" data-topic="${i}" aria-pressed="${ui.topic===String(i)}">${t}</button>`).join("")}</div></div>
+      <button class="btn btn-main btn-wide" id="go">Начать тест</button>
+      ${wrongN ? `<button class="btn btn-line btn-wide" id="go-wrong" style="color:var(--red);border-color:var(--red)">Решить только мои ошибки · ${wrongN}</button>` : ""}
+    </section>
+
+    <section class="sheet" aria-labelledby="h-study">
+      <h2 id="h-study">Учить</h2>
+      <p class="muted">Вопрос и сразу правильный ответ. Можно скрыть ответы и проверять себя.</p>
+      <button class="btn btn-line btn-wide" id="go-study">Открыть: вопрос → ответ</button>
+    </section>`;
+  app.querySelectorAll("[data-set]").forEach(b => b.onclick = () => { useSet(b.dataset.set); home(); });
+  app.querySelectorAll("[data-count]").forEach(b => b.onclick = () => { ui.count = +b.dataset.count; home(); });
+  app.querySelectorAll("[data-topic]").forEach(b => b.onclick = () => { ui.topic = b.dataset.topic; home(); });
+  app.querySelector("#go").onclick = () => {
+    let pool = ui.topic === "all" ? QS : QS.filter(q => q.t === TOPICS[+ui.topic]);
+    startTest(shuffle(pool).slice(0, ui.count));
+  };
+  const gw = app.querySelector("#go-wrong"); if (gw) gw.onclick = () => startTest(shuffle(store.wrong.map(id => byId[id]).filter(Boolean)));
+  app.querySelector("#go-study").onclick = () => { study.open = new Set(); studyView(); };
+  top0();
+}
+
+/* ---------- TEST ---------- */
+function startTest(list){
+  if (!list.length) return home();
+  test = {
+    items: list.map(q => ({ q, order: q.tf ? [0,1] : shuffle([0,1,2,3]), pick: null })),
+    i: 0, exitArmed: false
+  };
+  quiz(); top0();
+}
+function quiz(){
+  const { items, i } = test, it = items[i], q = it.q, n = items.length;
+  const answered = items.filter(x => x.pick !== null).length;
+  const last = i === n - 1;
+  app.innerHTML = `
+    <div class="qbar">
+      <div class="row between">
+        <button class="btn btn-line" id="exit" style="min-height:40px;padding:8px 14px">${test.exitArmed ? '<span class="exit-warn">Точно выйти?</span>' : "Выйти"}</button>
+        <span class="counter">${i+1} / ${n}</span>
+      </div>
+      <div class="track" aria-hidden="true"><i style="width:${answered/n*100}%"></i></div>
+    </div>
+    <section class="sheet">
+      <span class="tag">${q.tf ? "Верно или неверно?" : esc(q.t || "")}</span>
+      <p class="qtext">${esc(q.q)}</p>
+      <div class="opts ${q.tf ? "tf" : ""}" role="radiogroup">
+        ${it.order.map((oi, k) => `<button class="opt" role="radio" data-oi="${oi}" aria-checked="${it.pick===oi}"><span class="let">${LET[k]}</span><span>${esc(q.o[oi])}</span></button>`).join("")}
+      </div>
+    </section>
+    <div class="qnav">
+      <button class="btn btn-line" id="prev" ${i===0?"disabled":""}>Назад</button>
+      ${last ? `<button class="btn btn-main" id="finish">Завершить${answered<n ? ` (${answered}/${n})` : ""}</button>`
+             : `<button class="btn btn-line" id="next">Дальше</button>`}
+    </div>`;
+  app.querySelectorAll(".opt").forEach(b => b.onclick = () => {
+    it.pick = +b.dataset.oi; test.exitArmed = false;
+    app.querySelectorAll(".opt").forEach(x => x.setAttribute("aria-checked", x === b));
+    if (!last) setTimeout(() => { if (test && test.items[test.i] === it) { test.i++; quiz(); } }, 260);
+    else quiz();
+  });
+  app.querySelector("#exit").onclick = () => { if (test.exitArmed) { test = null; home(); } else { test.exitArmed = true; quiz(); } };
+  app.querySelector("#prev").onclick = () => { test.i--; test.exitArmed = false; quiz(); };
+  const nx = app.querySelector("#next"); if (nx) nx.onclick = () => { test.i++; test.exitArmed = false; quiz(); };
+  const fin = app.querySelector("#finish"); if (fin) fin.onclick = finish;
+}
+function finish(){
+  const items = test.items;
+  const ok = items.filter(x => x.pick === x.q.a).length;
+  const wrong = new Set(store.wrong);
+  items.forEach(x => x.pick === x.q.a ? wrong.delete(x.q.id) : wrong.add(x.q.id));
+  store.wrong = [...wrong].sort((a,b) => a-b);
+  store.last = { ok, total: items.length };
+  save();
+  test.done = { ok };
+  results();
+}
+function gradeOf(p){ return p >= 0.9 ? 5 : p >= 0.75 ? 4 : p >= 0.6 ? 3 : 2; }
+function results(){
+  const items = test.items, n = items.length, ok = test.done.ok, bad = n - ok, p = ok / n;
+  const per = TOPICS.map(t => { const xs = items.filter(x => x.q.t === t); return { t, n: xs.length, ok: xs.filter(x => x.pick === x.q.a).length }; }).filter(r => r.n);
+  app.innerHTML = `
+    <section class="sheet">
+      <span class="eyebrow">Результат</span>
+      <div class="grade-wrap">
+        <div class="grade" aria-label="Оценка ${gradeOf(p)}">${gradeOf(p)}</div>
+        <div><div class="score">${ok} из ${n}</div><p class="muted">${Math.round(p*100)}% правильно${bad ? ` · ошибок: ${bad}` : ""}</p></div>
+      </div>
+      <div class="topics">${per.map(r => `<div class="trow"><span>${r.t}</span><b>${r.ok}/${r.n}</b><div class="track"><i style="width:${r.ok/r.n*100}%"></i></div></div>`).join("")}</div>
+    </section>
+    ${bad ? `<button class="btn btn-red btn-wide" id="review">Работа над ошибками · ${bad}</button>` : `<div class="sheet all-good"><h2>Без единой ошибки</h2><p class="muted">Можно брать следующий набор.</p></div>`}
+    ${bad ? `<button class="btn btn-line btn-wide" id="redo">Решить ошибки заново</button>` : ""}
+    <div class="qnav">
+      <button class="btn btn-line" id="home">На главную</button>
+      <button class="btn btn-main" id="again">Новый тест</button>
+    </div>`;
+  const rv = app.querySelector("#review"); if (rv) rv.onclick = review;
+  const rd = app.querySelector("#redo"); if (rd) rd.onclick = redoWrong;
+  app.querySelector("#home").onclick = () => { test = null; home(); };
+  app.querySelector("#again").onclick = () => { const pool = ui.topic === "all" ? QS : QS.filter(q => q.t === TOPICS[+ui.topic]); startTest(shuffle(pool).slice(0, ui.count)); };
+  top0();
+}
+function redoWrong(){ startTest(shuffle(test.items.filter(x => x.pick !== x.q.a).map(x => x.q))); }
+function review(){
+  const bad = test.items.filter(x => x.pick !== x.q.a);
+  app.innerHTML = `
+    <header class="hero"><span class="eyebrow">Работа над ошибками</span><h1>${bad.length} ${plural(bad.length, "ошибка","ошибки","ошибок")}</h1>
+      <p>Прочитайте правильный ответ вслух. Потом решите эти вопросы ещё раз.</p></header>
+    ${bad.map(x => `
+      <article class="sheet err">
+        <div class="err-head"><span class="tag">Вопрос ${x.q.id} · ${esc(x.q.t || "")}</span><span class="mark">ошибка</span></div>
+        <p class="qtext">${esc(x.q.q)}</p>
+        <div class="ans">
+          <div class="yours"><small>Ваш ответ</small>${x.pick === null ? "<i>нет ответа</i>" : `<s>${esc(x.q.o[x.pick])}</s>`}</div>
+          <div class="right"><small>Правильно</small>${esc(x.q.o[x.q.a])}</div>
+        </div>
+        ${x.q.n ? `<p class="note">${esc(x.q.n)}</p>` : ""}
+      </article>`).join("")}
+    <button class="btn btn-red btn-wide" id="redo">Решить эти ${bad.length} заново</button>
+    <div class="qnav"><button class="btn btn-line" id="back">К результату</button><button class="btn btn-line" id="home">На главную</button></div>`;
+  app.querySelector("#redo").onclick = redoWrong;
+  app.querySelector("#back").onclick = results;
+  app.querySelector("#home").onclick = () => { test = null; home(); };
+  top0();
+}
+function plural(n, a, b, c){ const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? a : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? b : c; }
+
+/* ---------- STUDY ---------- */
+function studyView(){
+  app.innerHTML = `
+    <div class="qbar">
+      <div class="row between"><button class="btn btn-line" id="home" style="min-height:40px;padding:8px 14px">На главную</button><span class="eyebrow">Вопрос → ответ</span></div>
+      <input class="search" id="s" type="search" placeholder="Поиск по словам: медиана, Стьюдент, выборка…" value="${esc(study.q)}" autocomplete="off">
+      <div class="chips-scroll">
+        <button class="chip" data-t="all" aria-pressed="${study.topic==="all"}">Все</button>
+        ${TOPICS.map((t,i) => `<button class="chip" data-t="${i}" aria-pressed="${study.topic===String(i)}">${t}</button>`).join("")}
+        ${store.wrong.length ? `<button class="chip" data-w="1" aria-pressed="${study.onlyWrong}" style="color:var(--red)">Мои ошибки · ${store.wrong.length}</button>` : ""}
+      </div>
+      <label class="switch"><input type="checkbox" id="hide" ${study.hide?"checked":""}> Скрыть ответы (проверить себя)</label>
+    </div>
+    ${SET.memo ? `<section class="sheet memo"><span class="eyebrow">Запомнить сначала</span>${SET.memo}</section>` : ""}
+    <div id="cards" style="display:flex;flex-direction:column;gap:12px"></div>`;
+  const s = app.querySelector("#s");
+  s.oninput = () => { study.q = s.value; cards(); };
+  app.querySelectorAll("[data-t]").forEach(b => b.onclick = () => { study.topic = b.dataset.t; study.onlyWrong = false; studyView(); });
+  const w = app.querySelector("[data-w]"); if (w) w.onclick = () => { study.onlyWrong = !study.onlyWrong; study.topic = "all"; studyView(); };
+  app.querySelector("#hide").onchange = e => { study.hide = e.target.checked; study.open = new Set(); cards(); };
+  app.querySelector("#home").onclick = home;
+  cards();
+}
+function cards(){
+  const qq = study.q.trim().toLowerCase();
+  let list = QS;
+  if (study.onlyWrong) list = list.filter(q => store.wrong.includes(q.id));
+  else if (study.topic !== "all") list = list.filter(q => q.t === TOPICS[+study.topic]);
+  if (qq) list = list.filter(q => (q.q + " " + q.o[q.a]).toLowerCase().includes(qq));
+  const box = app.querySelector("#cards");
+  if (!list.length) { box.innerHTML = `<p class="empty">Ничего не найдено.</p>`; return; }
+  box.innerHTML = list.map(q => {
+    const shown = !study.hide || study.open.has(q.id);
+    return `<article class="sheet card">
+      <span class="tag">№ ${q.id} · ${esc(q.t || "")}</span>
+      <p class="qtext" style="font-size:17px">${esc(q.q)}</p>
+      ${shown ? `<div class="ansbox">${q.tf ? (q.a === 0 ? "✓ Верно" : "✗ Неверно") : esc(q.o[q.a])}</div>${q.n ? `<p class="note">${esc(q.n)}</p>` : ""}`
+              : `<button class="ansbox hidden-ans" data-open="${q.id}">Показать ответ</button>`}
+    </article>`;
+  }).join("");
+  box.querySelectorAll("[data-open]").forEach(b => b.onclick = () => { study.open.add(+b.dataset.open); cards(); });
+}
+
+if (SETS.length) home(); else app.innerHTML = '<p class="empty">Тесты не найдены.</p>';
+</script>
+
+</body>
+</html>
